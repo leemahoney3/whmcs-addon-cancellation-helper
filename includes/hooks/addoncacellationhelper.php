@@ -67,7 +67,7 @@ function addon_cancellation_helper_event($vars) {
         ]);
     
     } catch (\Exception $e) {
-        // Possibly log this error?
+        // Possibly log this error? Or a todo? Need to do something here...someday...
     }
 
     # Loop through all users invoices where the status is Unpaid (to prevent us cancelling paid or draft invoices)
@@ -106,7 +106,7 @@ function addon_cancellation_helper_event($vars) {
                     'status' => 'Cancelled'
                 ]);
             } catch (\Exception $e) {
-                // Possibly log this error?
+                // Possibly log this error? Yeah.. todo.. I know..
             }
 
             # Call WHMCS's local API to create a new invoice (so we can generate an invoice number)
@@ -133,7 +133,7 @@ function addon_cancellation_helper_event($vars) {
                         'invoiceid' => $newInvoiceID,
                     ]);
                 } catch (\Exception $e) {
-                    // Possibly log this error?
+                    // Possibly log this error? Did anyone say a todo?
                 }
 
             }
