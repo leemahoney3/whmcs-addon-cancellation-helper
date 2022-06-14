@@ -17,7 +17,7 @@ use WHMCS\Database\Capsule;
  * @author     Lee Mahoney <lee@leemahoney.dev>
  * @copyright  Copyright (c) Lee Mahoney 2022
  * @license    MIT License
- * @version    0.0.1
+ * @version    0.0.2
  * @link       https://leemahoney.dev
  */
 
@@ -67,7 +67,7 @@ function addon_cancellation_helper_event($vars) {
         ]);
     
     } catch (\Exception $e) {
-        // Possibly log this error? Or a todo? Need to do something here...someday...
+        logActivity("Unable to update notes on addon #{$addonData->id}. Reason: {$e->getMessage()}", 0);
     }
 
     # Loop through all users invoices where the status is Unpaid (to prevent us cancelling paid or draft invoices)
@@ -106,7 +106,7 @@ function addon_cancellation_helper_event($vars) {
                     'status' => 'Cancelled'
                 ]);
             } catch (\Exception $e) {
-                // Possibly log this error? Yeah.. todo.. I know..
+                logActivity("Unable to cancel invoice #{$userInvoice->id} for addon #{$vars['id']}. Reason: {$e->getMessage()}", 0);
             }
 
             # Call WHMCS's local API to create a new invoice (so we can generate an invoice number)
@@ -133,7 +133,7 @@ function addon_cancellation_helper_event($vars) {
                         'invoiceid' => $newInvoiceID,
                     ]);
                 } catch (\Exception $e) {
-                    // Possibly log this error? Did anyone say a todo?
+                    logActivity("Failed to add new invoice items to invoice #{$newInvoiceID}. Reason: {$e->getMessage()}", 0);
                 }
 
             }
@@ -141,8 +141,6 @@ function addon_cancellation_helper_event($vars) {
             # Update the subtotal on the invoice
             $newInvoice = Capsule::table('tblinvoices')->where('id', $newInvoiceID)->first();
             updateTotals($newInvoice, $unrelated);
-
-                 
 
             # Update the old invoice's subtotal (as it would be still what it was before we moved the items off, surprised whmcs hardcodes this to the database still!)
             updateTotals($userInvoice, $related);
@@ -205,7 +203,7 @@ function updateTotals($invoice, $items) {
         ]);
     
     } catch(\Exception $e) {
-        // Possibly log this error?
+        logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", 0);
     }
 
 }
