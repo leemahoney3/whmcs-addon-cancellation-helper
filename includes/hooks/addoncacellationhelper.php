@@ -17,7 +17,7 @@ use WHMCS\Database\Capsule;
  * @author     Lee Mahoney <lee@leemahoney.dev>
  * @copyright  Copyright (c) Lee Mahoney 2022
  * @license    MIT License
- * @version    0.0.2
+ * @version    1.0.2
  * @link       https://leemahoney.dev
  */
 
@@ -68,6 +68,22 @@ function addon_cancellation_helper_event($vars) {
     
     } catch (\Exception $e) {
         logActivity("Unable to update notes on addon #{$addonData->id}. Reason: {$e->getMessage()}", 0);
+    }
+
+    if ($addonData->subscriptionid) {
+
+        $gateway = new \WHMCS\Module\Gateway;
+
+        $gateway->load('paypalcheckout');
+
+        if ($gateway->functionExists('cancelSubscription')) {
+            $gateway->call('cancelSubscription', ['subscriptionID' => $addonData->subscriptionid]);
+        }
+
+        Capsule::table('tblhostingaddons')->where('id', $addonData->id)->update([
+            'subscriptionid' => ''
+        ]);
+
     }
 
     # Loop through all users invoices where the status is Unpaid (to prevent us cancelling paid or draft invoices)
