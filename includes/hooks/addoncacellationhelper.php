@@ -74,7 +74,7 @@ function addon_cancellation_helper_event($vars) {
 
         $gateway = new \WHMCS\Module\Gateway;
 
-        $gateway->load('paypalcheckout');
+        $gateway->load($addonData->paymentmethod);
 
         if ($gateway->functionExists('cancelSubscription')) {
             $gateway->call('cancelSubscription', ['subscriptionID' => $addonData->subscriptionid]);
