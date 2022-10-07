@@ -1,6 +1,14 @@
 <?php
 
-use WHMCS\Database\Capsule;
+
+use WHMCS\CustomField;
+use WHMCS\Service\Addon;
+use WHMCS\Module\Gateway;
+use WHMCS\Billing\Invoice;
+use WHMCS\Service\Service;
+use WHMCS\Authentication\CurrentUser;
+use WHMCS\CustomField\CustomFieldValue;
+use WHMCS\Billing\Invoice\Item as InvoiceItem;
 
 /**
  * Addon Cancellation Helper Hook
@@ -17,7 +25,7 @@ use WHMCS\Database\Capsule;
  * @author     Lee Mahoney <lee@leemahoney.dev>
  * @copyright  Copyright (c) Lee Mahoney 2022
  * @license    MIT License
- * @version    1.0.2
+ * @version    1.0.3
  * @link       https://leemahoney.dev
  */
 
@@ -40,13 +48,13 @@ function addon_cancellation_helper_event($vars) {
     $fieldName = 'Cancellation Ticket ID';
 
     # Grab the addon's data
-    $addonData = Capsule::table('tblhostingaddons')->where('id', $vars['id'])->first();
+    $addonData = Addon::where('id', $vars['id'])->first();
 
     # Note keeping, let's grab a couple of things we'll need to make the note.
-    $fieldID        = Capsule::table('tblcustomfields')->where(['fieldname' => $fieldName, 'type' => 'addon', 'relid' => $addonData->id])->first()->id;
-    $ticketID       = Capsule::table('tblcustomfieldsvalues')->where(['fieldid' => $fieldID, 'relid' => $addonData->id])->first()->value;
+    $fieldID        = CustomField::where(['fieldname' => $fieldName, 'type' => 'addon', 'relid' => $addonData->id])->first()->id;
+    $ticketID       = CustomFieldValue::where(['fieldid' => $fieldID, 'relid' => $addonData->id])->first()->value;
     $date           = date('d/m/Y');
-    $currentUser    = new \WHMCS\Authentication\CurrentUser;
+    $currentUser    = new CurrentUser;
     $username       = $currentUser->admin()->username;
 
     # Grab current notes
@@ -62,17 +70,17 @@ function addon_cancellation_helper_event($vars) {
     # Update the notes
     try {
 
-        Capsule::table('tblhostingaddons')->where('id', $addonData->id)->update([
+        Addon::where('id', $addonData->id)->update([
             'notes' => $notes
         ]);
     
     } catch (\Exception $e) {
-        logActivity("Unable to update notes on addon #{$addonData->id}. Reason: {$e->getMessage()}", 0);
+        logActivity("Unable to update notes on addon #{$addonData->id}. Reason: {$e->getMessage()}", $addonData->userid);
     }
 
     if ($addonData->subscriptionid) {
 
-        $gateway = new \WHMCS\Module\Gateway;
+        $gateway = new Gateway;
 
         $gateway->load($addonData->paymentmethod);
 
@@ -80,14 +88,14 @@ function addon_cancellation_helper_event($vars) {
             $gateway->call('cancelSubscription', ['subscriptionID' => $addonData->subscriptionid]);
         }
 
-        Capsule::table('tblhostingaddons')->where('id', $addonData->id)->update([
+        Addon::where('id', $addonData->id)->update([
             'subscriptionid' => ''
         ]);
 
     }
 
     # Loop through all users invoices where the status is Unpaid (to prevent us cancelling paid or draft invoices)
-    foreach (Capsule::table('tblinvoices')->where(['userid' => $addonData->userid, 'status' => 'Unpaid'])->get() as $userInvoice) {
+    foreach (Invoice::where(['userid' => $addonData->userid, 'status' => 'Unpaid'])->get() as $userInvoice) {
     
         # Create two arrays, one to hold related invoice items (to the addon. Actually it should just be the addon ^_^) and one to hold all unrelated invoice items
         $related    = [];
@@ -97,10 +105,11 @@ function addon_cancellation_helper_event($vars) {
         $count = 0;
 
         # get a total count of invoice items that match the invoice id
-        $invoiceItemCount = Capsule::table('tblinvoiceitems')->where('invoiceid', $userInvoice->id)->count();
+        $invoiceItems           = InvoiceItem::where('invoiceid', $userInvoice->id)->get();
+        $invoiceItemCount       = count($invoiceItem);
 
         # Loop through invoice items that match the invoice id
-        foreach (Capsule::table('tblinvoiceitems')->where('invoiceid', $userInvoice->id)->get() as $invoiceItem) {
+        foreach ($invoiceItems as $invoiceItem) {
             
             # Check if the relid on the invoice item matches the addon id and the type is set to Addon, if so then increase the count and add to array. Otherwise, add to unrelated array
             if ($invoiceItem->relid == $addonData->id && $invoiceItem->type == "Addon") {
@@ -117,12 +126,12 @@ function addon_cancellation_helper_event($vars) {
         if ($count != 0) {
 
             try {
-                Capsule::table('tblinvoices')->where('id', $userInvoice->id)->update([
-                    'date_cancelled' => date('Y-m-d H:i:s'),
-                    'status' => 'Cancelled'
+                Invoice::where('id', $userInvoice->id)->update([
+                    'date_cancelled'    => date('Y-m-d H:i:s'),
+                    'status'            => 'Cancelled'
                 ]);
             } catch (\Exception $e) {
-                logActivity("Unable to cancel invoice #{$userInvoice->id} for addon #{$vars['id']}. Reason: {$e->getMessage()}", 0);
+                logActivity("Unable to cancel invoice #{$userInvoice->id} for addon #{$vars['id']}. Reason: {$e->getMessage()}", $userInvoice->userid);
             }
 
             # Call WHMCS's local API to create a new invoice (so we can generate an invoice number)
@@ -138,24 +147,26 @@ function addon_cancellation_helper_event($vars) {
                 'duedate'       => $userInvoice->duedate,
             ];
 
-            $result         = localAPI($command, $postData, $currentUser->admin()->username);
+            $result         = localAPI($command, $postData);
             $newInvoiceID   = $result['invoiceid'];
 
             # Loop through invoice line items in the unrelated array and update them to the new invoice ID
             foreach($unrelated as $id) {
 
                 try {
-                    Capsule::table('tblinvoiceitems')->where('id', $id)->update([
+
+                    InvoiceItem::where('id', $id)->update([
                         'invoiceid' => $newInvoiceID,
                     ]);
+
                 } catch (\Exception $e) {
-                    logActivity("Failed to add new invoice items to invoice #{$newInvoiceID}. Reason: {$e->getMessage()}", 0);
+                    logActivity("Failed to add new invoice items to invoice #{$newInvoiceID}. Reason: {$e->getMessage()}", $userInvoice->userid);
                 }
 
             }
 
             # Update the subtotal on the invoice
-            $newInvoice = Capsule::table('tblinvoices')->where('id', $newInvoiceID)->first();
+            $newInvoice = Invoice::where('id', $newInvoiceID)->first();
             updateTotals($newInvoice, $unrelated);
 
             # Update the old invoice's subtotal (as it would be still what it was before we moved the items off, surprised whmcs hardcodes this to the database still!)
@@ -169,7 +180,7 @@ function addon_cancellation_helper_event($vars) {
                 'id' => $newInvoiceID,
             );
 
-            localAPI($command, $postData, $currentUser->admin()->username);
+            localAPI($command, $postData);
             
         }
         
@@ -193,7 +204,7 @@ function updateTotals($invoice, $items) {
     foreach ($items as $item) {
 
         # Add amount of each item to the sub total of the invoice
-        $itemData = Capsule::table('tblinvoiceitems')->where('id', $item)->first();
+        $itemData = InvoiceItem::where('id', $item)->first();
         $subTotal += $itemData->amount;
 
     }
@@ -211,15 +222,15 @@ function updateTotals($invoice, $items) {
     # Update the values on the invoice
     try {
 
-        Capsule::table('tblinvoices')->where('id', $invoice->id)->update([
-            'subTotal' => $subTotal,
-            'tax' => $tax,
-            'tax2' => $tax2,
-            'total'    => $total,
+        Invoice::where('id', $invoice->id)->update([
+            'subTotal'  => $subTotal,
+            'tax'       => $tax,
+            'tax2'      => $tax2,
+            'total'     => $total,
         ]);
     
     } catch(\Exception $e) {
-        logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", 0);
+        logActivity("Unable to update totals on invoice #{$invoice->id}. Reason: {$e->getMessage()}", $invoice->userid);
     }
 
 }
